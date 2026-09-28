@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # heartbeat-loop.sh — heartbeat 常驻循环（替代 cron；2026-09-03 起由 agentd 监督：
-# 进程型 bot bot/heartbeat-loop/，spec.json + restartPolicy=auto 崩溃自愈
+# 进程型 bot bot/heartbeat-loop/，spec.json + restartPolicy=auto 崩溃自愈；
 # 停止/恢复 = agentctl control bot/heartbeat-loop pause|restart，见 DISPATCH.md §4「守护型 bot」）
 #
-# 行为：启动时不立即执行，先等到下一个北京时间 11:00（本机时区即 Asia/Shanghai）
+# 行为：启动时不立即执行，先等到下一个北京时间 11:00（本机时区即 Asia/Shanghai），
 # 到点执行 assistant/heartbeat.sh，然后睡到次日 11:00，无限循环。
 # 日志追加到 run/logs/heartbeat.log（每次启动/唤醒/执行/下次触发时间）。
 # SIGTERM/SIGINT 优雅退出（trap）。
 #
-# 跨平台：日期计算同时兼容 GNU date（date -d）与 macOS BSD date（date -j/-r/-v）
+# 跨平台：日期计算同时兼容 GNU date（date -d）与 macOS BSD date（date -j/-r/-v），
 # 启动时一次性检测方言（DATE_KIND）。任何日期异常都有日志 + 60s 兜底，绝不空转。
 set -u
 

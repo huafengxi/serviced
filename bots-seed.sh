@@ -4,7 +4,7 @@
 # 声明源 = ~/m/bots/daemon/<name>/{spec.json,prompt.md}（被追踪，修改走 git）；运行态 =
 # ~/m/agents/bot/<name>/…（agents-sync 管理，不入 git；agentd/agentctl 是运行态写者）。
 # 本脚本只在运行态文件**缺失**时原子恢复（tmp+rename），存在则跳过——绝不覆盖运行态
-# 文件，也不做声明源→运行态的周期性强同步（那会重现 agents-sync 与 git 双写者的竞态
+# 文件，也不做声明源→运行态的周期性强同步（那会重现 agents-sync 与 git 双写者的竞态，
 #）。
 #
 # seed 面：
@@ -18,7 +18,7 @@
 # 调用点：① make bots.seed（手动/验证）；② svc/agentd-loop.sh 拉起 runner 前
 # （fresh clone 后自愈）。
 #
-# 不按 ~/m/env/host-id 过滤：声明的 bot 可带任意 host（声明源里的 host 就是它的目标机）
+# 不按 ~/m/env/host-id 过滤：声明的 bot 可带任意 host（声明源里的 host 就是它的目标机），
 # 不过滤也无害——agentd 只监督 host=自己的 bot，其它机器多出几份运行态 spec 不会被拉起
 # （他机 host 的 bot 靠 agents-sync 把它那台机需要的文件带过去）。
 #

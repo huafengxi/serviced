@@ -25,12 +25,12 @@
 # agents-sync desired=online/actual=offline/state='skip (…)')。旧规则
 # （「隐藏所有 skip 行」）已废止；
 # show_skip=1 开关语义随之改为「展示全部行（含双 offline 的）」，参数名保
-# 留兼容旧链接。数据层配套改动：svc.py 对 skip 服务也做真实探活（pidfile）
+# 留兼容旧链接。数据层配套改动：svc.py 对 skip 服务也做真实探活（pidfile），
 # 但 skip 行永不计 drift；sync 对 skip 服务的处置也未变（skip = 本机不管理 →
 # 永不启停/重启，drift 与 stale 恒 False）。
 #
 # section 标题归 markdown 文档：输出不再带 `## `
-# 标题行——标题由消费方文档（svc.md 静态二级标题）提供，输出只给数据
+# 标题行——标题由消费方文档（svc.md 静态二级标题）提供，输出只给数据；
 # 原节头动态摘要（本机/远端、drift、服务计数、隐藏数）降级为输出的首行
 # 普通行，信息逐字等价。
 #
@@ -257,7 +257,7 @@ def interp(store, **kw):
     hosts = ([h.strip() for h in hosts_env.split(',') if h.strip()]
              if hosts_env else list(_HOSTS_DEFAULT))
     local = _local_host_id(ws)
-    # 展示开关：请求带 show_skip=1 时展示全部行（含双 offline 的）
+    # 展示开关：请求带 show_skip=1 时展示全部行（含双 offline 的）；
     # 参数名沿用旧开关兼容链接，语义已改（2026-08-31 用户拍板）
     show_all = str(kw.get('show_skip', '')) == '1'
 
@@ -303,7 +303,7 @@ def _main(argv):
     `python3 svc4web.py <host> [show_skip=1]` 单 host 区块（不再调 rsh -l）
 
     输出 markdown 区块（与 interp 中 _render 同源），供每 host 一个
-    markdown cmd widget 的 svc.md 消费；标题由 svc.md 静态二级标题提供
+    markdown cmd widget 的 svc.md 消费；标题由 svc.md 静态二级标题提供，
     输出不含 `## ` 行，动态摘要为首行普通行。抓取失败仍输出降级区块并 exit 0
     （stderr 保持干净）。
     """

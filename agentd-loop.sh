@@ -8,7 +8,7 @@
 # 只管 <root>/agents/ 一棵树，无共享状态。
 #
 # --root 语义（已核实 T1-3）：树布局 = <ROOT>/agents/<id>
-# （proto.agent_dir = root/agents/<id>），工具层 core.ts 写 ~/m/agents/<taskId>
+# （proto.agent_dir = root/agents/<id>），工具层 core.ts 写 ~/m/agents/<taskId>，
 # 故 root = ~/m（$WS）——不是 ~/m/agents（那是计划 §2.2/README 的笔误，已随本任务更正）。
 #
 # 日志：runner 自身经 --log-file 写 run/logs/agentd.log；loop 自身的启停记录也写同一文件。
@@ -35,7 +35,7 @@ echo "$(date '+%F %T') [agentd-loop] 启动 (pid $$)，由 make agentd.start 管
 # 保证 fresh clone 后自愈。seed 失败不阻塞守护启动（仅记日志）。
 bash "$WS/svc/bots-seed.sh" >> "$LOG" 2>&1 || echo "$(date '+%F %T') [agentd-loop] bots-seed 失败（不阻塞守护启动）" >> "$LOG"
 
-# 机器身份（多机阶段 0；设计 DESIGN-multimachine §3.3
+# 机器身份（多机阶段 0；设计 DESIGN-multimachine §3.3；
 # host-id 改映射文件）：spec.host 一律用规范名（env/ssh-hosts
 # 的 Host 别名）；登记侧写规范名，故认领侧身份 = 规范名 + 本机 hostname 别名。
 # 规范名来源 = env/host-id 映射文件（hostname → 规范名，入库一份全机器共用）按 $(hostname)

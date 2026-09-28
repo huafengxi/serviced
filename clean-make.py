@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(WS, "agentd"))
 import envscrub  # noqa: E402  spawn 环境洗刷口径单点
 
 # 画像/agent 标记（DISPATCH_PROFILE / AI_AGENT）已收进 envscrub.ENV_SCRUB_EXACT
-# 单一事实源（攒批 4：三个调用方同享，不再只在本薄壳里额外 pop）
+# 单一事实源（攒批 4：三个调用方同享，不再只在本薄壳里额外 pop）；
 # 下面的前缀自检仍是兜底（DISPATCH/AI_ 前缀命中即拒绝执行 make）。
 LEAK_PREFIXES = ("AGENT", "DISPATCH", "PI_", "SESSIOND", "AI_")
 

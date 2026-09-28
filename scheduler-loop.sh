@@ -32,14 +32,14 @@ trap on_term TERM INT
 echo "$(date '+%F %T') [scheduler-loop] 启动 (pid $$)，由 make scheduler.start 管理" >> "$LOG"
 
 # 机器身份：放行门禁第四条件（目标主机判活）需要本机身份集合——
-# spec.host 已在登记时物化落盘（登记机规范名；缺 host = 无人认领
+# spec.host 已在登记时物化落盘（登记机规范名；缺 host = 无人认领、
 # 永久排队，认领/调度两侧均无「缺省→本机」兜底）；判活候补锁名取自本机身份（规范名 +
 # hostname 别名），口径照抄 agentd-loop.sh（env/host-id 映射：hostname → 规范名，未命中回退 hostname）。
 # --all-hosts 下不影响候补过滤（全局视图），只供判活与 --all-hosts 关闭时的兑底形态。
 HOST_ID="$(awk -v h="$(hostname)" '!/^[[:space:]]*#/ && $1==h {print $2; exit}' "$WS/env/host-id" 2>/dev/null || true)"
 [ -n "$HOST_ID" ] || HOST_ID="$(hostname)"
 
-# 占位上限 10（用户 08-28 指令）：参数化覆盖代码缺省 4
+# 占位上限 10（用户 08-28 指令）：参数化覆盖代码缺省 4，
 # 不改 agentd/scheduler.py 的 DEFAULT_MAX_CONCURRENT。
 MAX_CONCURRENT=10
 
