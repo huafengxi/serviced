@@ -7,8 +7,7 @@
 > channel-independent canonical `PATH` for service children, bounded liveness
 > probes (process / HTTP / command-expect), and per-service pid+meta bookkeeping.
 > Alongside it: `git-sync.py` (periodic ff-only pull of a repo set with dirty-tree
-> and unpushed-commit guards, plus automatic sub-repo discovery), `clean-make.py`
-> (run a lifecycle command from a scrubbed environment), `svc4web.py` (aggregate
+> and unpushed-commit guards, plus automatic sub-repo discovery), `svc4web.py` (aggregate
 > several machines' status into markdown for a dashboard), four small supervision
 > loops, and a seed script for process-style daemon declarations. Everything is
 > Python 3 stdlib + PyYAML, or POSIX shell. The rest of this file is the
@@ -36,7 +35,7 @@
   - （同族的信箱转发守护 `notify-user` 的实现体在主仓 `bots/notify-user/`：它含 IM 通道与收件人信息，不随本仓公开）
 - `bots-seed.sh`：把**被追踪的进程声明源**（`spec.json` 必需 + `prompt.md` 可选）only-if-missing 原子 seed 到运行态目录（`make bots.seed`），**绝不覆盖运行态既有文件**。声明源目录 = `${BOTS_SEED_SRC:-<ws>/bots/daemon}`（本工作区的声明源在主仓 `bots/daemon/`，人格正文含内网约定 ⇒ 不在本仓）。修改纪律与生效路径 = 工作区的 `assistant/DISPATCH.md`「声明源与 spec 修改纪律」。
 - `svc4web.py`：8080 实时端点，聚合四机 `svc.py status` 输出 markdown（dash.itab 消费）。
-- `clean-make.py`：从干净环境执行 make 的薄壳（重启纪律 ②）——按 `agentd/envscrub.py` 名单洗刷调度身份变量后再跑 make，执行前自检、有残留即拒绝。子任务/服务进程内启停服务一律经它，不直接 `make`。
+- **服务子进程不继承调用方的调度身份**：start spawn（`build_env`）、`stop_cmd`、version 探针与 `status.cmd` 四处共用 `clean_env()`，按 `agentd/envscrub.py`（名单单一事实源，与 runner spawn 同口径）洗刷身份族后再注入 secrets 与规范 PATH ⇒ **从任务/常驻会话里直接 `make <name>.start` 也是干净的**，不需要外层包装脚本。未入名单的新身份标记由提交期钉桩挡（`pi-wrap/test_wrap.py` 的 T47：扫 `spec.command` env 前缀键，断言每枚都被洗刷名单覆盖）。
 - `git-mirror-post-receive.sh`：dev 镜像回推 GitHub 的 post-receive hook（`make git-mirror.hooks` 安装）。
 
 ## 常用命令
@@ -46,7 +45,6 @@ make svc.status          # 全部服务状态 + 两类 drift（desired/actual + 
 make svc.sync            # 按 env/services.yml 纠偏两类 drift：该起的起、该停的停，online 但版本 stale 的重启（stop+start；skip 行永不触碰）
 make <name>.start/.stop  # 单服务启停（<name> ∈ env/services.yml）
 make logs.trim           # 清理 run/logs（一律原地截断，不重启服务）
-python3 svc/clean-make.py <name>.stop <name>.start   # 干净环境重启（任务/服务进程内必用；--dry-run 只看洗刷自检）
 python3 svc/test_svc_path.py     # 单测：canonical_path() 的语义回归网（合成夹具，不启停服务）
 python3 svc/test_git_sync.py     # 单测：git-sync.py 的拉取判定面（/tmp 沙箱，不写 ~/m）
 # 工作区侧另有跨仓钉桩（不在本仓）：python3 ops/test_llm_router_accounts.py

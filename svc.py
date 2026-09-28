@@ -553,7 +553,6 @@ def ps_table():
 # matched/killed. The upward walk stops at the first ancestor matching NONE.
 _WRAPPER_CHAIN_RES = (
     re.compile(r"\bsvc\.py\b"),            # parent svc.py (sync -> make -> svc.py)
-    re.compile(r"\bclean-make\.py\b"),     # clean-env make thin shell
     re.compile(r"(?:\A|/)g?make(?:\s|\Z)"),            # make running a recipe
     re.compile(r"(?:\A|/)(?:ba|da|z|k|fi)?sh\s+(?:-\S+\s+)*-\S*c"),
     # ^ sh -c / bash -lc recipe shells AND caller tool shells (`bash -c '<whole
@@ -582,11 +581,11 @@ def self_and_ancestors(table):
          `pgrep -f "<that pattern>"`) from being SIGTERMed by its own stop —
          the stop lands, the start after it never runs, nothing prints and the
          service stays offline. Judging the chain by "cmdline contains
-         'svc.py'" does NOT work: through clean-make.py that token sits in the
-         make recipe shell, not in the caller's cmdline.
+         'svc.py'" does NOT work: through a launcher above make that token sits
+         in the make recipe shell, not in the caller's cmdline.
       ② stopping at the first non-wrapper keeps a supervised restart possible:
          agentd-loop.sh -> runner.py -> pi-rpc-wrap.py -> pi -> (tool shell) ->
-         clean-make.py -> make -> sh -c -> svc.py stops at the pi session, so
+         make -> sh -c -> svc.py stops at the pi session, so
          `bash svc/agentd-loop\\.sh` above it stays matchable. Daemons we start
          are detached (start_new_session) and are never ancestors at all.
     Residual disciplines (new launcher shapes must be added to
