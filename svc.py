@@ -713,6 +713,16 @@ def pidfile_alive(name):
     return None
 
 
+# A re-exec launcher: the image the kernel reports for a process still in the
+# window between `execve(script)` and the launcher's own `execve(interpreter)`.
+# Recording it would be an invented reading — the declaration side resolves
+# THROUGH the launcher (`#!/usr/bin/env X` → X), so the two sides would be
+# compared against different things and status would print a phantom
+# `⚠ exe≠声明解析`. Sampling that window is a real race: start writes the meta
+# right after spawn, and a shebang script's first image IS the launcher.
+_LAUNCHER_EXES = frozenset({"env"})
+
+
 def proc_exe(pid):
     """realpath of the executable the kernel resolved for `pid`, or None.
 
@@ -722,12 +732,14 @@ def proc_exe(pid):
     comm=`, trusted ONLY when it is an absolute path — Linux `comm` is the
     15-char truncated name, and realpath() of a bare name would invent a file
     under the cwd. A " (deleted)" suffix (binary replaced since exec) is
-    dropped before resolving."""
+    dropped before resolving. A launcher image (_LAUNCHER_EXES) is None on both
+    paths: unobtainable, never a substitute for the interpreter."""
     try:
         target = os.readlink(f"/proc/{pid}/exe")
         if target.endswith(" (deleted)"):
             target = target[:-len(" (deleted)")]
-        return os.path.realpath(target)
+        real = os.path.realpath(target)
+        return None if os.path.basename(real) in _LAUNCHER_EXES else real
     except OSError:
         pass
     try:
@@ -737,7 +749,10 @@ def proc_exe(pid):
     except (OSError, subprocess.TimeoutExpired):
         return None
     comm = r.stdout.strip()
-    return os.path.realpath(comm) if comm.startswith("/") else None
+    if not comm.startswith("/"):
+        return None
+    real = os.path.realpath(comm)
+    return None if os.path.basename(real) in _LAUNCHER_EXES else real
 
 
 def exe_version(exe):
