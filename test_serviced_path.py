@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""test_svc_path.py — unit tests for svc/svc.py's canonical_path() (the
-channel-independent PATH service children get).
+"""test_serviced_path.py — unit tests for serviced/serviced.py's
+canonical_path() (the channel-independent PATH service children get).
 
 Everything runs on SYNTHETIC trees under tempfile.mkdtemp(): no service is
 started or stopped, no pidfile/meta is touched, nothing is written into the
@@ -16,7 +16,7 @@ Covers (the six semantic faces of canonical_path):
      the inherited tail) keeps its first position.
 + ③ empty entries dropped — `::` in either source never yields a "" segment
      (an empty PATH entry means the cwd: an accident, never an intent).
-+ ④ the SVC_PATH_PREFIX override's three states — unset = the module's
++ ④ the SERVICED_PATH_PREFIX override's three states — unset = the module's
      built-in prefix; non-empty = wholesale replacement (no built-in segment
      survives); empty string = no prefix at all = the pre-normalization
      behaviour.
@@ -33,7 +33,7 @@ Covers (the six semantic faces of canonical_path):
 + ⑧ the sandbox identity guard itself: it refuses production roots (decoy
      inputs only — no rmtree is ever aimed at them).
 
-Run: python3 svc/test_svc_path.py      (exit 1 = at least one FAIL)
+Run: python3 test_serviced_path.py     (exit 1 = at least one FAIL)
 """
 
 import atexit
@@ -55,7 +55,7 @@ def _load(name, path):
     return mod
 
 
-svc = _load("svc_under_test", os.path.join(HERE, "svc.py"))
+serviced = _load("serviced_under_test", os.path.join(HERE, "serviced.py"))
 
 PASS = 0
 FAIL = []
@@ -113,7 +113,7 @@ def ok(name, cond, detail=""):
 
 
 def mk_sandbox():
-    root = tempfile.mkdtemp(prefix="svc-path-test-")
+    root = tempfile.mkdtemp(prefix="serviced-path-test-")
     SANDBOXES.append(root)
     return root
 
@@ -131,17 +131,17 @@ def mkdirs(root, *names):
 @contextlib.contextmanager
 def prefix(specs, override="unset", inherited=None, drop_path=False):
     """Run canonical_path() against a synthetic built-in prefix and a controlled
-    environment. override: "unset" = remove SVC_PATH_PREFIX; any other string is
+    environment. override: "unset" = remove SERVICED_PATH_PREFIX; any other string is
     set verbatim ("" included = the empty-string state). inherited: value for
     PATH (None = leave the environment's own PATH alone)."""
-    saved = (svc.PATH_PREFIX,
-             os.environ.get("SVC_PATH_PREFIX", "unset"),
+    saved = (serviced.PATH_PREFIX,
+             os.environ.get("SERVICED_PATH_PREFIX", "unset"),
              os.environ.get("PATH", "unset"))
-    svc.PATH_PREFIX = tuple(specs)
+    serviced.PATH_PREFIX = tuple(specs)
     if override == "unset":
-        os.environ.pop("SVC_PATH_PREFIX", None)
+        os.environ.pop("SERVICED_PATH_PREFIX", None)
     else:
-        os.environ["SVC_PATH_PREFIX"] = override
+        os.environ["SERVICED_PATH_PREFIX"] = override
     if drop_path:
         os.environ.pop("PATH", None)
     elif inherited is not None:
@@ -149,8 +149,8 @@ def prefix(specs, override="unset", inherited=None, drop_path=False):
     try:
         yield
     finally:
-        svc.PATH_PREFIX = saved[0]
-        for key, val in (("SVC_PATH_PREFIX", saved[1]), ("PATH", saved[2])):
+        serviced.PATH_PREFIX = saved[0]
+        for key, val in (("SERVICED_PATH_PREFIX", saved[1]), ("PATH", saved[2])):
             if val == "unset":
                 os.environ.pop(key, None)
             else:
@@ -179,7 +179,7 @@ a, b = mkdirs(root, "a", "b")
 missing = os.path.join(root, "nope")
 inh = mkdirs(root, "inh")[0]
 with prefix((), override=SEP.join([a, missing, b]), inherited=inh):
-    out = svc.canonical_path(inh)
+    out = serviced.canonical_path(inh)
 ok("existing prefix segments enter", a in parts(out) and b in parts(out), out)
 ok("a missing segment contributes nothing", missing not in parts(out), out)
 ok("inherited tail kept", parts(out) == [a, b, inh], out)
@@ -188,12 +188,12 @@ print("\n[②] dedupe, first occurrence wins")
 root = mk_sandbox()
 a, d1, d2, new = mkdirs(root, "a", "d1", "d2", "new")
 with prefix((), override=SEP.join([a, d1, d2]), inherited=SEP.join([d2, a, new])):
-    out = svc.canonical_path(SEP.join([d2, a, new]))
+    out = serviced.canonical_path(SEP.join([d2, a, new]))
 ok("each directory appears once", len(parts(out)) == len(set(parts(out))), out)
 ok("first position wins (prefix order kept, repeats dropped)",
     parts(out) == [a, d1, d2, new], out)
 with prefix((a, a), override="unset", inherited=a):
-    out = svc.canonical_path(a)
+    out = serviced.canonical_path(a)
 ok("a repeated built-in segment appears once", parts(out) == [a], out)
 
 print("\n[③] empty entries dropped")
@@ -201,28 +201,28 @@ root = mk_sandbox()
 a = mkdirs(root, "a")[0]
 inh = mkdirs(root, "inh")[0]
 with prefix((), override=SEP.join(["", a, ""]), inherited=SEP.join(["", inh, ""])):
-    out = svc.canonical_path(SEP.join(["", inh, ""]))
+    out = serviced.canonical_path(SEP.join(["", inh, ""]))
 ok("no empty segment in the output", "" not in parts(out), out)
 ok("the real segments survive", parts(out) == [a, inh], out)
 
-print("\n[④] SVC_PATH_PREFIX override: three states")
+print("\n[④] SERVICED_PATH_PREFIX override: three states")
 root = mk_sandbox()
 p1, p2, o1, inh = mkdirs(root, "p1", "p2", "o1", "inh")
 # unset -> the module's built-in prefix (swapped to a synthetic pair)
 with prefix((p1, p2), override="unset", inherited=inh):
-    out_unset = svc.canonical_path(inh)
+    out_unset = serviced.canonical_path(inh)
 ok("unset = built-in prefix + inherited tail", parts(out_unset) == [p1, p2, inh],
     out_unset)
 # non-empty -> wholesale replacement: no built-in segment survives
 with prefix((p1, p2), override=o1, inherited=inh):
-    out_set = svc.canonical_path(inh)
+    out_set = serviced.canonical_path(inh)
 ok("non-empty override replaces the prefix wholesale",
     parts(out_set) == [o1, inh], out_set)
 ok("no built-in segment survives the replacement",
     p1 not in parts(out_set) and p2 not in parts(out_set), out_set)
 # empty string -> no prefix at all (the pre-normalization behaviour)
 with prefix((p1, p2), override="", inherited=inh):
-    out_empty = svc.canonical_path(inh)
+    out_empty = serviced.canonical_path(inh)
 ok("empty-string override = no prefix (pre-normalization behaviour)",
     parts(out_empty) == [inh], out_empty)
 ok("empty-string override drops every prefix segment",
@@ -236,7 +236,7 @@ for v in ("v8", "v10", "v22", "system", "8"):
 inh = mkdirs(root, "inh")[0]
 pattern = os.path.join(nv, "*", "bin")
 with prefix((), override=pattern, inherited=inh):
-    out = svc.canonical_path(inh)
+    out = serviced.canonical_path(inh)
 got = parts(out)
 hits = [p for p in got if p.startswith(nv + os.sep)]
 # Expected order derived by hand from _version_key (digit runs compare as
@@ -258,9 +258,9 @@ root = mk_sandbox()
 p1 = mkdirs(root, "p1")[0]
 floor = [d for d in os.defpath.split(SEP) if d]
 with prefix((p1,), override="unset", inherited=""):
-    out_empty_inh = svc.canonical_path("")
+    out_empty_inh = serviced.canonical_path("")
 with prefix((p1,), override="unset", drop_path=True):
-    out_no_path = svc.canonical_path()
+    out_no_path = serviced.canonical_path()
 for label, out in (("empty inherited PATH", out_empty_inh),
                    ("unset PATH", out_no_path)):
     got = parts(out)
@@ -292,7 +292,7 @@ for d in inherited.split(SEP):
         manual.append(d)
 manual_out = SEP.join(manual)
 with prefix(declared, override="unset", inherited=inherited):
-    out = svc.canonical_path(inherited)
+    out = serviced.canonical_path(inherited)
 ok("hand-built expectation equals the function's output, byte for byte",
     out == manual_out, f"got  {out}\n       want {manual_out}")
 ok("no os.defpath entry was appended (the tail contributed)",

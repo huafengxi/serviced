@@ -1,31 +1,50 @@
 #!/usr/bin/env python3
-"""svc.py — reconcile services against env/services.yml (single source of
-truth) and execute the service lifecycle.
+"""serviced.py — reconcile the services declared for THIS machine against
+their declarations, and execute the service lifecycle.
+
+The registry is two layers of JSON under <workspace>/services/:
+  profiles/<service>.json          how to run it: version + lifecycle fields
+                                   (cmd/match/stop_match/cwd/wrapper/stop_cmd/
+                                   status/start_timeout/env_file/require_env/
+                                   extra_env) + summary/note/notes prose.
+                                   Shared by every machine that runs it.
+  daemons/<host>.<service>.json    that THIS machine runs it: `hostname` (the
+                                   matching authority: equal to the machine's
+                                   hostname or a dot-separated prefix of it),
+                                   `profile` (which profile to run), `desired`
+                                   (online|offline). One file per
+                                   (machine, service) pair; the `<host>`
+                                   filename segment is the machine's canonical
+                                   name (dot-free, for humans) and is
+                                   cross-checked against the host-id map.
+A machine's face = its own daemon declarations; nothing else is listed, probed
+or touched there (no cross-machine rows, no `hosts:`/`exclude_hosts:` lists).
 
 Usage:
-  svc.py status            desired-vs-actual table + drift count + runtime
-                           block (the exe/interpreter each online service
-                           actually resolved to), all read-only
-  svc.py status --machine  the same data as one JSON line {host, total, drift,
-                           services:[{name, version, run_version, stale,
-                           desired, actual, state}]} — the input face of a
-                           multi-host aggregator (the deployment's dashboard
-                           endpoint)
-  svc.py sync              reconcile both drift kinds: start desired-online
-                           that is offline, stop desired-offline that is
-                           online, restart (stop+start) online-but-stale
-  svc.py trim              truncate every run/logs/*.log in place, no restart
-  svc.py start NAME        start per the entry's lifecycle fields (cmd/match/
-                           stop_match/cwd/wrapper/stop_cmd/status/env hooks)
-  svc.py stop NAME         stop_cmd when declared, else TERM then KILL the
-                           pidfile process (its whole group) + pattern hits;
-                           removes pidfile and version meta
-  svc.py status NAME       one liveness probe (proc | http | cmd/expect);
-                           exit 0 = online, non-zero = offline
+  serviced.py status            desired-vs-actual table + drift count + runtime
+                                block (the exe/interpreter each online service
+                                actually resolved to), all read-only
+  serviced.py status --machine  the same data as one JSON line {host, total,
+                                drift, services:[{name, version, run_version,
+                                stale, desired, actual, state}]} — the input
+                                face of a multi-host aggregator (the
+                                deployment's dashboard endpoint)
+  serviced.py sync              reconcile both drift kinds: start
+                                desired-online that is offline, stop
+                                desired-offline that is online, restart
+                                (stop+start) online-but-stale
+  serviced.py trim              truncate every run/logs/*.log in place, no
+                                restart
+  serviced.py start NAME        start per the profile's lifecycle fields
+  serviced.py stop NAME         stop_cmd when declared, else TERM then KILL the
+                                pidfile process (its whole group) + pattern
+                                hits; removes pidfile and version meta
+  serviced.py status NAME       one liveness probe (proc | http | cmd/expect);
+                                exit 0 = online, non-zero = offline
 
 Pointers — single sources, not restated here:
-  schema and field semantics    the service registry file's own header comment
-                                (this workspace: env/services.yml)
+  registry schema and fields      the registry's own README
+                                  (this workspace: services/README.md)
   start/stop, version, restart  the deployment's operating rules (this workspace:
                                 root AGENTS.md「服务与后台进程（make）」)
   troubleshooting               the deployment's service-troubleshooting playbook
@@ -46,8 +65,9 @@ Invariants (rule bodies):
      /proc/<pid>/fd is blind for non-dumpable processes.
   5. Start order: read declared version → launch → write run/pids/NAME.meta
      only after the start is confirmed (spawn / status probe).
-  6. A missing meta renders `运行 v?` and is never stale; skip rows are probed
-     for display only — never drift, never stale, never touched by sync.
+  6. A missing meta renders `运行 v?` and is never stale. Only services
+     declared for this machine are listed at all: an undeclared service is
+     never probed, never drifted, never touched.
   7. Version drift does not distinguish the change face: online + meta present
      + meta != declared version ⇒ stale, counted in the drift figure and
      restarted by sync (item 6's missing-meta rule still holds).
@@ -55,8 +75,8 @@ Invariants (rule bodies):
      share one wording source (_status_fields).
   9. Service children get a channel-independent PATH: clean_env() replaces the
      inherited PATH with PATH_PREFIX (existing dirs only, deduped) followed by
-     the inherited tail, so one services.yml resolves to one interpreter no
-     matter which channel ran make; SVC_PATH_PREFIX overrides the prefix
+     the inherited tail, so one registry resolves to one interpreter no
+     matter which channel ran make; SERVICED_PATH_PREFIX overrides the prefix
      wholesale (empty string = no prefix = the pre-normalization behaviour).
      With nothing inherited, os.defpath supplies the system floor: a PATH
      without /bin would not even resolve the shell that `cmd` entries run.
@@ -83,19 +103,32 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import yaml
-
 WS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WS / "agentd"))
 sys.path.insert(0, str(WS / "encrypt"))
 import envdec  # noqa: E402  env_file 解密 + KV 正则单点
 import envscrub  # noqa: E402  spawn 环境洗刷名单单点
-SVC_FILE = WS / "env" / "services.yml"
+SERVICES_DIR = WS / "services"
+PROFILES_DIR = SERVICES_DIR / "profiles"
+DAEMONS_DIR = SERVICES_DIR / "daemons"
+# Optional canonical-name map (`<hostname> <canonical>` per line): it makes the
+# daemon filenames human-readable and is cross-checked against them, but it is
+# never the matching authority (that is each declaration's `hostname`).
+HOST_ID_FILE = Path(os.environ.get("SERVICED_HOST_ID")
+                    or (WS / "env" / "host-id"))
+# Registry shapes. Unknown keys are rejected: a typo'd lifecycle key would
+# otherwise be silently ignored and quietly change how a service runs.
+PROFILE_KEYS = frozenset({
+    "name", "version", "summary", "note", "notes", "cmd", "match",
+    "stop_match", "cwd", "wrapper", "stop_cmd", "status", "start_timeout",
+    "env_file", "require_env", "extra_env"})
+DAEMON_KEYS = frozenset({"hostname", "profile", "desired", "note"})
+DESIRED_STATES = ("online", "offline")
 LOGS_DIR = WS / "run" / "logs"
 PIDS_DIR = WS / "run" / "pids"
 # Cap on the `status.cmd` probe subprocess itself (probe_online): a probe that
 # runs longer is reported offline instead of holding the status table.
-# Every wait in svc.py is bounded by its own timeout — gather() joins its probe
+# Every wait in serviced.py is bounded by its own timeout — gather() joins its probe
 # threads without a per-future cap, so no probe may be unbounded.
 PROBE_TIMEOUT = 30
 # Cap on the two `ps` scans (ps_table / pid_lstart): a hung `ps` (D state,
@@ -128,7 +161,7 @@ EXE_VERSION_ALLOW = re.compile(r"python[0-9.]*|node|nodejs|bash|sh|dash|zsh|ksh"
 # 去重，随后接继承的 PATH ⇒ 只加不减，不在前缀里的目录照旧可见（删段永不构成回退）。
 # 顺序按登录 shell 的既有优先级排：用户级 node 目录在 /usr/local/bin 之前，多版本
 # 并存时解析结果确定（不取决于遍历顺序的偶然）。
-# 覆写口 SVC_PATH_PREFIX（冒号分隔，`~` 与 glob 均可）：设了即**整体替换**内置前缀
+# 覆写口 SERVICED_PATH_PREFIX（冒号分隔，`~` 与 glob 均可）：设了即**整体替换**内置前缀
 # （不合并——合并表达不出「去掉某段」）；设为空串 = 不加前缀 = 改动前行为（回退无需
 # revert 代码）。部署侧的现网消费者名单、以及「服务壳里不得自补 PATH」的复发条件，
 # 住该部署自己的事实册（本仓不留名单）。
@@ -164,15 +197,15 @@ def _prefix_dirs(spec):
 
 def canonical_path(inherited=None):
     """Channel-independent PATH for service children: the built-in prefix (or
-    the SVC_PATH_PREFIX override) followed by the inherited PATH — `~`/glob
+    the SERVICED_PATH_PREFIX override) followed by the inherited PATH — `~`/glob
     expanded, existing directories only, first occurrence wins, empty entries
     dropped (an empty PATH entry means the cwd: an accident, never an intent).
     `inherited` defaults to this process's own PATH. When nothing is
     inherited, os.defpath (the platform's own default search path) supplies the
     system floor — clean_env() always writes a PATH, so neither Python's
     os.get_exec_path() CS_PATH fallback nor the child shell's default would
-    otherwise apply, and `cmd: [bash, …]` entries could not even start."""
-    override = os.environ.get("SVC_PATH_PREFIX")
+    otherwise apply, and `cmd: ["bash", …]` entries could not even start."""
+    override = os.environ.get("SERVICED_PATH_PREFIX")
     specs = override.split(os.pathsep) if override is not None else PATH_PREFIX
     out = []
     for spec in specs:
@@ -209,46 +242,171 @@ def clean_env():
     return env
 
 
-def load_services():
-    with open(SVC_FILE) as f:
-        data = yaml.safe_load(f)
-    svcs = data["services"]
-    names = [s["name"] for s in svcs]
-    if len(names) != len(set(names)):
-        sys.exit(f"error: duplicate service names in {SVC_FILE}")
-    return svcs
+def _read_json(path):
+    """One registry file → dict; unreadable / non-object / bad JSON is a config
+    error (exit), never a silent skip: a declaration that fails to parse must
+    not disappear from the face it governs."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except OSError as e:
+        sys.exit(f"error: cannot read {path}: {e}")
+    except ValueError as e:
+        sys.exit(f"error: {path}: invalid JSON ({e})")
+    if not isinstance(data, dict):
+        sys.exit(f"error: {path}: the top level must be a JSON object")
+    return data
 
 
-def _host_matches(hostnames, entries):
-    """Case-insensitive host match: an entry matches if it equals the
-    hostname or is a dot-separated prefix of it (e.g. an entry `node1` matches
+def _unknown_keys(path, data, allowed):
+    unknown = sorted(set(data) - allowed)
+    if unknown:
+        sys.exit(f"error: {path}: unknown key(s) {unknown} (allowed: "
+                 f"{sorted(allowed)})")
+
+
+def host_id_map(host_id_file=None):
+    """{hostname(lower) → canonical name} from the optional host-id map:
+    `<hostname> <canonical>` per line, `#` comments and blanks skipped. A
+    missing or unreadable map yields {} — the canonical name then falls back to
+    the hostname itself, and the filename cross-check below is skipped."""
+    out = {}
+    try:
+        text = Path(host_id_file or HOST_ID_FILE).read_text(encoding="utf-8")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) >= 2:
+            out[parts[0].lower()] = parts[1]
+    return out
+
+
+def this_host(host_id_file=None):
+    """(hostname, canonical) for this machine: hostname = platform.node() (the
+    value daemon declarations are matched against), canonical = its host-id map
+    entry when there is one (the value daemon filenames are written with)."""
+    hn = platform.node()
+    return hn, host_id_map(host_id_file).get(hn.lower(), hn)
+
+
+def _host_matches(hostname, entry):
+    """Case-insensitive host match: `entry` matches when it equals the machine
+    hostname or is a dot-separated prefix of it (an entry `node1` matches
     hostnames `node1` and `node1.example.com`)."""
-    hn = hostnames.lower()
-    return any(hn == h or hn.startswith(h + ".")
-               for h in (str(x).lower() for x in entries))
+    hn, e = str(hostname).lower(), str(entry).lower()
+    return hn == e or hn.startswith(e + ".")
 
 
-def applies_here(svc):
-    """Whether this service's `desired` applies on this machine: `hosts`
-    restricts, `exclude_hosts` excludes, the two are mutually exclusive (both
-    present = config error, exit). applies = (no hosts or hosts match) AND (no
-    exclude_hosts or exclude_hosts do NOT match)."""
-    hosts = svc.get("hosts")
-    excluded = svc.get("exclude_hosts")
-    if hosts and excluded:
-        sys.exit(f"error: service {svc.get('name')!r} has both 'hosts' and "
-                 f"'exclude_hosts' in {SVC_FILE.name} — they are mutually "
-                 "exclusive; pick one")
-    hn = platform.node().lower()
-    if hosts and not _host_matches(hn, hosts):
-        return False
-    if excluded and _host_matches(hn, excluded):
-        return False
-    return True
+def load_profiles(profiles_dir=None):
+    """{service name → lifecycle definition}. The name IS the file stem: a
+    `name` key inside the file is redundant, and a disagreement is a config
+    error (one source, no drift). `version` must be an integer — it is compared
+    against the meta's first line as text, and a float/str would make every
+    restart look stale."""
+    out = {}
+    for path in sorted(Path(profiles_dir or PROFILES_DIR).glob("*.json")):
+        data = _read_json(path)
+        name = path.stem
+        _unknown_keys(path, data, PROFILE_KEYS)
+        if "name" in data and str(data["name"]) != name:
+            sys.exit(f"error: {path}: 'name' is {data['name']!r} but the file "
+                     f"stem is {name!r} — the filename is the single source")
+        if "version" in data and not isinstance(data["version"], int):
+            sys.exit(f"error: {path}: 'version' must be an integer, got "
+                     f"{data['version']!r}")
+        data.pop("name", None)
+        data["name"] = name
+        out[name] = data
+    if not out:
+        sys.exit(f"error: no service profiles under {profiles_dir or PROFILES_DIR}")
+    return out
+
+
+def load_daemons(daemons_dir=None, host_id_file=None):
+    """[(path, host segment, declaration)] for every daemon declaration, sorted
+    by filename. Filename = `<host>.<service>.json` (`<host>` dot-free).
+
+    Two config errors are caught here rather than at match time:
+      + `profile` must agree with the filename's service segment (a copy-paste
+        that updated one side only would run the wrong definition);
+      + when the host-id map resolves the declared `hostname`, its canonical
+        name must equal the filename's host segment (a declaration copied to a
+        new machine without editing `hostname` would otherwise sit there
+        matching nobody — an invisible hole, not a loud failure)."""
+    canon = host_id_map(host_id_file)
+    out = []
+    for path in sorted(Path(daemons_dir or DAEMONS_DIR).glob("*.json")):
+        stem = path.stem
+        host_seg, sep, name_seg = stem.partition(".")
+        if not sep or not host_seg or not name_seg or "." in name_seg:
+            sys.exit(f"error: {path}: the filename must be "
+                     f"<host>.<service>.json (host dot-free, service = the "
+                     f"profile name); got {stem!r}")
+        data = _read_json(path)
+        _unknown_keys(path, data, DAEMON_KEYS)
+        missing = sorted({"hostname", "profile", "desired"} - set(data))
+        if missing:
+            sys.exit(f"error: {path}: missing key(s) {missing}")
+        if str(data["profile"]) != name_seg:
+            sys.exit(f"error: {path}: 'profile' is {data['profile']!r} but the "
+                     f"filename says {name_seg!r} — they must agree")
+        if data["desired"] not in DESIRED_STATES:
+            sys.exit(f"error: {path}: 'desired' must be one of "
+                     f"{list(DESIRED_STATES)}, got {data['desired']!r}")
+        want = canon.get(str(data["hostname"]).lower())
+        if want is not None and want != host_seg:
+            sys.exit(f"error: {path}: the filename's host segment is "
+                     f"{host_seg!r} but hostname {data['hostname']!r} maps to "
+                     f"canonical {want!r} — rename the file or fix hostname")
+        out.append((path, host_seg, data))
+    return out
+
+
+def services_here(hostname=None, profiles=None, daemons=None,
+                  profiles_dir=None, daemons_dir=None, host_id_file=None):
+    """This machine's face: [{profile fields…, name, desired}] for every daemon
+    declaration whose `hostname` matches this machine, sorted by service name.
+
+    A dangling `profile` and two declarations for the same service on this
+    machine are config errors (exit). Zero matches is not an error (a fresh
+    machine has none yet) but is warned about loudly: an empty face means
+    nothing here is managed, and `status` would report a healthy `0 drift`."""
+    hn, canonical = this_host(host_id_file)
+    hn = hostname or hn
+    pdir = Path(profiles_dir or PROFILES_DIR)
+    if profiles is None:
+        profiles = load_profiles(pdir)
+    if daemons is None:
+        daemons = load_daemons(daemons_dir, host_id_file)
+    out, seen = [], {}
+    for path, _host_seg, d in daemons:
+        if not _host_matches(hn, d["hostname"]):
+            continue
+        name = str(d["profile"])
+        if name in seen:
+            sys.exit(f"error: {path} and {seen[name]} both declare {name!r} "
+                     f"for this machine ({hn})")
+        seen[name] = path
+        if name not in profiles:
+            sys.exit(f"error: {path}: profile {name!r} does not exist "
+                     f"({pdir / (name + '.json')})")
+        svc = dict(profiles[name])
+        svc["desired"] = d["desired"]
+        out.append(svc)
+    if not out:
+        print(f"warning: no daemon declaration matches this machine "
+              f"(hostname={hn}, canonical={canonical}) — nothing is managed "
+              f"here; expected files under "
+              f"{Path(daemons_dir or DAEMONS_DIR)}/", file=sys.stderr)
+    return out
 
 
 def _probe_actual(svc):
-    """'online' or 'offline' — the in-process equivalent of `svc.py status
+    """'online' or 'offline' — the in-process equivalent of `serviced.py status
     <name>`; a `_validate_entry` failure (sys.exit) counts offline, the verdict
     a non-zero probe exit would give."""
     try:
@@ -262,47 +420,39 @@ def _probe_actual(svc):
 
 
 def gather():
-    """[(svc, actual, drift, applies)] for every declared service, in
-    load_services() order; probes run in-process and in parallel.
-
-    Skip rows are probed too (the svc tab shows them when running) but their
-    drift is hardwired False, and their probe is pidfile-only — deliberately
-    NOT the full probe: a status target that no-ops to exit 0 where the
-    service is n/a would falsely report online.
+    """[(svc, actual, drift)] for every service declared on THIS machine, in
+    services_here() order (service name); probes run in-process and in
+    parallel. There are no skip rows: a service this machine does not declare
+    is not listed, not probed and never touched.
 
     Each probe is bounded by its own timeout (http: urlopen; cmd:
     PROBE_TIMEOUT; proc: PS_TIMEOUT), which is what makes the plain `with`
     join safe; a per-future cap would only serialize the wait (N hung probes
     ⇒ ~N×cap). Unexpected errors count offline with a stderr warning."""
-    svcs = load_services()
-    applies = [applies_here(s) for s in svcs]  # once per service, reused below
+    svcs = services_here()
     with ThreadPoolExecutor(max_workers=8) as ex:
-        futures = [
-            ex.submit(_probe_actual, s) if a else ex.submit(
-                lambda s=s: "online" if pidfile_alive(s["name"]) else "offline")
-            for s, a in zip(svcs, applies)]
+        futures = [ex.submit(_probe_actual, s) for s in svcs]
         rows = []
-        for svc, f, a in zip(svcs, futures, applies):
+        for svc, f in zip(svcs, futures):
             try:
                 actual = f.result()
             except Exception as e:
                 print(f"warning: {svc['name']}: probe error ({e!r}); "
                       "treated as offline", file=sys.stderr)
                 actual = "offline"
-            rows.append((svc, actual, a and actual != svc["desired"], a))
+            rows.append((svc, actual, actual != svc["desired"]))
     return rows
 
 
-def _version_fields(svc, actual, applies):
+def _version_fields(svc, actual):
     """(run_version, note, stale) for one row; meaningful only while online.
     run_version = the meta's recorded version, '?' when the meta is missing;
     note = the STATE annotation ('' when versions match).
     stale = True iff online AND meta present AND meta != declared: the change
     face is not distinguished, so any bump whose restart has not landed on this
-    host reads as stale. A missing meta is never stale (no false positives);
-    skip rows annotate but never count as drift. The drift figure, the
-    `--machine` payload and sync's restart branch all consume this one return
-    value."""
+    host reads as stale. A missing meta is never stale (no false positives).
+    The drift figure, the `--machine` payload and sync's restart branch all
+    consume this one return value."""
     if actual != "online":
         return None, "", False
     declared = str(svc.get("version", "-"))
@@ -310,28 +460,15 @@ def _version_fields(svc, actual, applies):
     if run_v is None:
         return "?", f"（运行 v?，代码 v{declared}）", False
     if run_v != declared:
-        return run_v, f"stale（运行 v{run_v}，代码 v{declared}，需重启）", applies
+        return run_v, f"stale（运行 v{run_v}，代码 v{declared}，需重启）", True
     return run_v, "", False
 
 
-def _status_fields(svc, actual, drift, applies):
+def _status_fields(svc, actual, drift):
     """(actual_str, state_str, stale) for one row; shared by the human and
     machine outputs so their wording cannot diverge. `stale` = version drift,
     separate from desired-vs-actual drift but counted in the drift figure."""
-    run_v, vnote, stale = _version_fields(svc, actual, applies)
-    if not applies:
-        if svc.get("hosts"):
-            limit = f"hosts: {', '.join(map(str, svc['hosts']))}"
-        else:
-            limit = f"exclude_hosts: {', '.join(map(str, svc.get('exclude_hosts') or []))}"
-        state = f"skip ({limit})"
-        if actual == "online":
-            # not managed on this host, but actually running — flag it so the
-            # svc tab shows the row (display rule: actual OR desired online)
-            state += " [online]"
-            if vnote:
-                state += f" {vnote}"
-        return actual, state, False
+    run_v, vnote, stale = _version_fields(svc, actual)
     if drift:
         state = f"DRIFT (want {svc['desired']}, is {actual})"
         if vnote:
@@ -384,15 +521,15 @@ def _print_runtime(runtime, no_reading, w):
 
 def cmd_status():
     rows = gather()
-    w = max(len(s["name"]) for s, _, _, _ in rows)
-    wv = max(max(len(str(s.get("version", "-"))) for s, _, _, _ in rows),
+    w = max(len(s["name"]) for s, _, _ in rows)
+    wv = max(max(len(str(s.get("version", "-"))) for s, _, _ in rows),
              len("VERSION"))
     print(f"{'SERVICE':<{w}}  {'VERSION':<{wv}} {'DESIRED':<8} {'ACTUAL':<8} STATE")
     print(f"{'-'*w}  {'-'*wv} {'-'*8} {'-'*8} -----")
     n_drift = 0
     runtime, no_reading = [], 0
-    for svc, actual, drift, applies in rows:
-        actual_s, state, stale = _status_fields(svc, actual, drift, applies)
+    for svc, actual, drift in rows:
+        actual_s, state, stale = _status_fields(svc, actual, drift)
         exe, interp, _, warn = _runtime_fields(svc, actual)
         n_drift += 1 if (drift or stale) else 0
         ver = str(svc.get("version", "-"))
@@ -414,8 +551,8 @@ def cmd_status_machine():
     rows = gather()
     services = []
     n_drift = 0
-    for svc, actual, drift, applies in rows:
-        actual_s, state, stale = _status_fields(svc, actual, drift, applies)
+    for svc, actual, drift in rows:
+        actual_s, state, stale = _status_fields(svc, actual, drift)
         exe, interp, expected, warn = _runtime_fields(svc, actual)
         n_drift += 1 if (drift or stale) else 0
         # additive keys only: consumers render the five original ones
@@ -454,20 +591,20 @@ def cmd_sync():
        what should be offline but is online (never a restart);
     ② version staleness — online + desired=online + running version (meta)
        != declared version → restart (stop, then start).
-    Staleness comes from `_version_fields`, so its invariants hold here: skip
-    rows and rows with a missing meta are never stale and so are never
-    touched. Rows act in services.yml order; the start/stop calls run
-    in-process (`_run_action`) and one failing action never aborts the rest."""
+    Staleness comes from `_version_fields`, so its invariants hold here: rows
+    with a missing meta are never stale and so are never touched. Rows act in
+    services_here() order (service name); the start/stop calls run in-process
+    (`_run_action`) and one failing action never aborts the rest."""
     rows = gather()
     actions = []  # [(action line, name, [act, ...])], act ∈ (start, stop)
-    for svc, actual, drift, applies in rows:
+    for svc, actual, drift in rows:
         name = svc["name"]
         if drift:
             want = svc["desired"]
             actions.append((f"[sync] {name}: desired={want} actual={actual}",
                             name, ["start" if want == "online" else "stop"]))
             continue  # desired=offline+online → stop only, never a restart
-        _, vnote, stale = _version_fields(svc, actual, applies)
+        _, vnote, stale = _version_fields(svc, actual)
         if stale and svc["desired"] == "online":
             actions.append((f"[sync] {name}: {vnote}, restarting",
                             name, ["stop", "start"]))
@@ -545,11 +682,11 @@ def ps_table():
     return rows
 
 
-# Command-line shapes of the invocation/wrapper chain above svc.py: they only
+# Command-line shapes of the invocation/wrapper chain above serviced.py: they only
 # carry our own argv text (or are pure launchers), so they must never be
 # matched/killed. The upward walk stops at the first ancestor matching NONE.
 _WRAPPER_CHAIN_RES = (
-    re.compile(r"\bsvc\.py\b"),            # parent svc.py (sync -> make -> svc.py)
+    re.compile(r"\bserviced\.py\b"),       # parent (sync -> make -> serviced.py)
     re.compile(r"(?:\A|/)g?make(?:\s|\Z)"),            # make running a recipe
     re.compile(r"(?:\A|/)(?:ba|da|z|k|fi)?sh\s+(?:-\S+\s+)*-\S*c"),
     # ^ sh -c / bash -lc recipe shells AND caller tool shells (`bash -c '<whole
@@ -578,11 +715,11 @@ def self_and_ancestors(table):
          `pgrep -f "<that pattern>"`) from being SIGTERMed by its own stop —
          the stop lands, the start after it never runs, nothing prints and the
          service stays offline. Judging the chain by "cmdline contains
-         'svc.py'" does NOT work: through a launcher above make that token sits
+         'serviced.py'" does NOT work: through a launcher above make that token
          in the make recipe shell, not in the caller's cmdline.
       ② stopping at the first non-wrapper keeps a supervised restart possible:
          loop.sh -> daemon.py -> session-wrapper -> agent -> (tool shell) ->
-         make -> sh -c -> svc.py stops at the agent session, so
+         make -> sh -c -> serviced.py stops at the agent session, so
          `bash <dir>/loop\\.sh` above it stays matchable. Daemons we start
          are detached (start_new_session) and are never ancestors at all.
     Residual disciplines (new launcher shapes must be added to
@@ -643,7 +780,7 @@ def pidfile(name):
 
 def metafile(name):
     """Version meta, written by `start NAME` after launch confirmation:
-    line 1 = the services.yml version in effect for the running process (its
+    line 1 = the declared (profile) version in effect for the running process
     original shape, invariant 11), followed by `key=value` runtime lines
     (`exe`, `interp`) describing what that process actually resolved to."""
     return PIDS_DIR / f"{name}.meta"
@@ -651,7 +788,7 @@ def metafile(name):
 
 def read_meta(name):
     """Recorded running version = the meta's FIRST line, or None if the meta is
-    missing/unreadable (legacy process, or never started via svc.py start).
+    missing/unreadable (legacy process, or never started via `start`).
     Only the first line is read, so the runtime lines below it cannot reach the
     version-drift check."""
     try:
@@ -870,11 +1007,22 @@ def _kill(pid, sig):
 
 
 def svc_entry(name):
-    """The service's services.yml entry, or a config error exit."""
-    for s in load_services():
-        if s["name"] == name:
-            return s
-    sys.exit(f"error: service {name!r} not declared in {SVC_FILE.name}")
+    """The named service's definition: its profile, plus `desired` from this
+    machine's daemon declaration when there is one. `start`/`stop`/`status
+    NAME` are explicit human actions and work off the profile alone, so a
+    service this machine does not declare can still be started here for
+    debugging — it just never appears in the table and `sync` never touches it.
+    Unknown name = config error exit."""
+    profiles = load_profiles()
+    if name not in profiles:
+        sys.exit(f"error: service {name!r} has no profile "
+                 f"({PROFILES_DIR / (name + '.json')})")
+    svc = dict(profiles[name])
+    for d in services_here(profiles=profiles):
+        if d["name"] == name:
+            svc["desired"] = d["desired"]
+            break
+    return svc
 
 
 def _lifecycle_name(argv):
@@ -998,7 +1146,8 @@ def cmd_start_name(argv):
     _validate_entry(svc)
     cmd = svc.get("cmd")
     if not cmd:
-        sys.exit(f"error: service {name!r} has no 'cmd' in {SVC_FILE.name}")
+        sys.exit(f"error: service {name!r} has no 'cmd' in "
+                 f"{PROFILES_DIR / (name + '.json')}")
     wrapper = svc.get("wrapper", "svc")
     # Version drift detection order: READ the declared version first → launch
     # → only after start confirmation WRITE the meta (it records "the
@@ -1105,7 +1254,7 @@ def cmd_stop_name(argv):
     print(msg)
     pidfile(name).unlink(missing_ok=True)
     # version meta belongs to the stopped run; removing it keeps "missing
-    # meta => ?" honest if the service is later started outside svc.py
+    # meta => ?" honest if the service is later started outside serviced.py
     metafile(name).unlink(missing_ok=True)
     return 0
 
