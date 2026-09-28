@@ -1,4 +1,4 @@
-# serviced/ — 声明式服务生命周期层（declarative service lifecycle）
+# serviced/ — 声明式服务生命周期层
 
 ## 收录判据（本仓边界）
 
