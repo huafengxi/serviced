@@ -7,8 +7,8 @@
 # 对等（含 dev，dev 上 ssh 自连），每机一条链路：
 # `ssh-sync.py watch <本机 ~/m/agents> dev:/data/shared/agents` 双向。
 #
-# 传输契约（权威 = dsync/ssh-sync.py docstring + `@dsync#watch-cost`）：
-# + 不开 --delete（删除不跨机传播；树内清理走 dsync/gc.py delete-list）；
+# 传输契约（权威 = agents-sync/ssh-sync.py docstring + `@agents-sync#watch-cost`）：
+# + 不开 --delete（删除不跨机传播；树内清理走 agents-sync/gc.py delete-list）；
 # + 覆盖安全由**文件系统属组闸门**结构性保证，全程无时间戳裁决：replica 组 = 同步
 #   落盘的副本，未标记 = 本机原件（每个文件只有一个可能来源，单写者纪律）；
 # + **每轮都协商整棵树**（push 走白名单 = 本地未标记文件，pull 走黑名单 = 本地未标记
@@ -23,7 +23,7 @@
 #   rsync 标志 -rlptDvc（-a 去掉 -o -g：属组只由 --chown 一处决定）；
 # + 探活锁文件（agents/run/agentd.<host>.lock）由闸门天然双向正确（各机写自己的锁：
 #   未标记→push 包含、pull 排除），不需要排除项。
-# 存量树首跑前须先打一次标：dsync/replica-tag.py（干跑留痕后 --apply）。
+# 存量树首跑前须先打一次标：agents-sync/replica-tag.py（干跑留痕后 --apply）。
 #
 # 监督：watch 进程退出（崩溃/断链）则记日志、有界退避后自动拉起——连续「短命退出」
 # （存活 <10s）睡眠翻倍至上限 60s，某次存活 ≥60s 即复位回 2s（避免闸门类必然失败变成
@@ -62,14 +62,14 @@
 # 续读位置错位；将来在 `done` 之后追加内容 ∨ 给循环加 `break`，都必须伴随重启。
 
 WS="$(cd "$(dirname "$0")/.." && pwd)"
-SYNC="$WS/dsync/ssh-sync.py"
+SYNC="$WS/agents-sync/ssh-sync.py"
 LOG="$WS/run/logs/agents-sync.log"
 mkdir -p "$WS/run/logs"
 
 # --- replica 补充组：自愈（一次）∨ 响亮失败（头注有完整缘由与实测） -------------------
 _gid_die() {  # 一行 ERROR（根因 + 可直接复制的修法）后退出，绝不进重拉循环
   local msg
-  msg="$(date '+%F %T') [agents-sync-loop] ERROR: 启动会话凭据缺 ${REPLICA_GROUP} 补充组，ssh-sync.py 属组闸门会拒绝运行（$1）。修法（复制执行，stop/start 分两次）: sg ${REPLICA_GROUP} -c \"python3 svc/clean-make.py agents-sync.stop\" 然后 sg ${REPLICA_GROUP} -c \"python3 svc/clean-make.py agents-sync.start\"；或 sudo usermod -aG ${REPLICA_GROUP} \$USER 后从**新登录会话**重启。不进入重拉循环。"
+  msg="$(date '+%F %T') [agents-sync-loop] ERROR: 启动会话凭据缺 ${REPLICA_GROUP} 补充组，ssh-sync.py 属组闸门会拒绝运行（$1）。修法（复制执行，stop/start 分两次）: sg ${REPLICA_GROUP} -c \"make agents-sync.stop\" 然后 sg ${REPLICA_GROUP} -c \"make agents-sync.start\"；或 sudo usermod -aG ${REPLICA_GROUP} \$USER 后从**新登录会话**重启。不进入重拉循环。"
   # 服务态下 svc.py 已把本进程 stderr 接到同一个日志文件（inode 相同）⇒ 只写 stderr
   # 一次，避免同一行在日志里重复；前台运行时两处都写。（该 test 上不能挂
   # 2>/dev/null：重定向会把 /proc/self/fd/2 自己改掉，实测则判假、两处都写。）
