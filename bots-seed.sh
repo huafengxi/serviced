@@ -11,7 +11,7 @@
 #   + spec.json  进程声明（必需；glob 锚点 = 有它才算一份声明）
 #   + prompt.md  会话型常驻 bot 的初始引导（**可选**：缺失即保持裸启动 = 设计
 #                决策 6 的「初始引导可选」路径；脚本守护型 bot 不给它，运行态无 session）。
-#                消费方 = agentd/pi-rpc-wrap.py 的初始投递：blank 新代 spawn 时投递一次
+#                消费方 = pi-wrap/pi-rpc-wrap.py 的初始投递：blank 新代 spawn 时投递一次
 #                会话已有 user 消息则幂等跳过。属 spawn 期读进会话的注入面 ⇒ 改动须递增
 #                env/services.yml 里 agentd 的 version。
 #

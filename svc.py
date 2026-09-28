@@ -136,7 +136,7 @@ PATH_PREFIX = (
     # shared-watch / qwen3 / krea2（nv1）；工作区约定的解释器
     "~/miniconda3/bin",
     # node/pi/pi-web/cc-connect：nv1、nv2 只在这里。消费者 = agentd 的孙进程
-    # （agentd/pi-rpc-wrap.py 用裸 "pi"）与 web 的会话宿主解析
+    # （pi-wrap/pi-rpc-wrap.py 用裸 "pi"）与 web 的会话宿主解析
     # （w/ext/sessiond/proc.py 的 shutil.which("pi")）
     "~/.local/node/bin",
     # 同上：dev——dev 唯一的 node 安装（/usr/local/bin 只有 pi 符号链接、没有 node，
