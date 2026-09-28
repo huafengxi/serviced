@@ -65,7 +65,7 @@ DEFAULT_ROOT = os.path.dirname(SCRIPT_DIR)  # the ~/m workspace
 
 # dev mirror hub: fetch half of git-mirror.sync (push-back = post-receive hook)
 DEV_HOST_ID = "dev"
-MIRROR_REPOS = "mirror pypack ido w tsql org2html pdo aifun pi-web archive llm-router rsh dotfiles dsync svc agentd pi-wrap".split()
+MIRROR_REPOS = "mirror pypack ido w tsql org2html pdo aifun pi-web archive llm-router rsh dotfiles dsync svc agentd pi-wrap private".split()
 MIRROR_FETCH_EVERY = 10  # rounds (~10 min at the default interval)
 MIRROR_FETCH_TIMEOUT = 120  # per mirror; a hung GitHub must not pile up
 
