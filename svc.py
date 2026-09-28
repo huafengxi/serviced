@@ -8,7 +8,9 @@ Usage:
                            actually resolved to), all read-only
   svc.py status --machine  the same data as one JSON line {host, total, drift,
                            services:[{name, version, run_version, stale,
-                           desired, actual, state}]} — svc4web.py's input
+                           desired, actual, state}]} — the input face of a
+                           multi-host aggregator (the deployment's dashboard
+                           endpoint)
   svc.py sync              reconcile both drift kinds: start desired-online
                            that is offline, stop desired-offline that is
                            online, restart (stop+start) online-but-stale
@@ -113,38 +115,33 @@ UNKNOWN = "unknown"
 # Executables whose `--version` we run. Observation must never execute a binary
 # with unknown semantics (an undefined flag could START it, or make it wait on
 # stdin), so the reading is limited to interpreters/shells — prefix/glob shaped
-# on purpose: a realpath carries the version suffix (conda's `python3` is
-# `python3.13`). Anything else records `unknown` (current instance: clash's
-# `mihomo`).
+# on purpose: a realpath carries the version suffix (a distribution's `python3`
+# may be `python3.13`). Anything else records `unknown` — a service binary that
+# is not an interpreter/shell.
 EXE_VERSION_ALLOW = re.compile(r"python[0-9.]*|node|nodejs|bash|sh|dash|zsh|ksh")
 
 # 规范 PATH（通道无关）：服务子进程解析到哪个解释器不得取决于「谁调用
-# 了 make」。实测缺陷（dev）：登录 shell 与会话通道的 PATH 都不含 ~/miniconda3/bin
-# ⇒ 裸 `python3`（rshd/rsh-worker 的 cmd）与 `#!/usr/bin/env python3` shebang 脚本
-# （git-sync/dav-sync/convert-file/maas）落到 /usr/bin/python3.8，而 nv1/nv2/mac 的
-# 通道解析到 conda 3.14/3.11 ⇒ 同一份 services.yml、不同解释器（工作区约定 = Python
-# 一律 ~/miniconda3，根 AGENTS.md「运行环境」）。
-# 前缀只收**有点名现网消费者**的目录（逐段见行内注释）：存在的才进、去重，随后接
-# 继承的 PATH ⇒ 只加不减，不在前缀里的目录照旧可见（删段永不构成回退）。顺序按各机
-# 登录 shell 的既有优先级排：node 目录在 /usr/local/bin 之前 ⇒ dev 的 `pi` 仍解析到
-# nvm 那支，不会换成 /usr/local/bin 里的另一份全局安装。
+# 了 make」。缺陷形态（实测）：登录 shell 与会话通道的 PATH 都不含用户级解释器
+# 目录 ⇒ cmd 里的裸 `python3` 与 `#!/usr/bin/env python3` 的 shebang 脚本落到系统
+# 老解释器，而另一些机器的通道解析到用户级新版本 ⇒ 同一份注册表、不同解释器。
+# 前缀只收**用户级/平台级的解释器与 CLI 安装位置**（逐段见行内注释）：存在的才进、
+# 去重，随后接继承的 PATH ⇒ 只加不减，不在前缀里的目录照旧可见（删段永不构成回退）。
+# 顺序按登录 shell 的既有优先级排：用户级 node 目录在 /usr/local/bin 之前，多版本
+# 并存时解析结果确定（不取决于遍历顺序的偶然）。
 # 覆写口 SVC_PATH_PREFIX（冒号分隔，`~` 与 glob 均可）：设了即**整体替换**内置前缀
 # （不合并——合并表达不出「去掉某段」）；设为空串 = 不加前缀 = 改动前行为（回退无需
-# revert 代码）。
+# revert 代码）。部署侧的现网消费者名单、以及「服务壳里不得自补 PATH」的复发条件，
+# 住该部署自己的事实册（本仓不留名单）。
 PATH_PREFIX = (
-    # python3：git-sync（四机）、rshd（dev）、rsh-worker（四机）、dav-sync /
-    # shared-watch / qwen3 / krea2（nv1）；工作区约定的解释器
+    # 用户级 Python 发行版前缀（conda/miniconda 类）：服务跑在它上面，不跑系统自带的那支
     "~/miniconda3/bin",
-    # node/pi/pi-web/cc-connect：nv1、nv2 只在这里。消费者 = agentd 的孙进程
-    # （pi-wrap/pi-rpc-wrap.py 用裸 "pi"）与 web 的会话宿主解析
-    # （w/ext/sessiond/proc.py 的 shutil.which("pi")）
+    # 用户级 node：孙进程以**裸名** exec CLI（shebang = env node）⇒ 只由这份 PATH 解析
     "~/.local/node/bin",
-    # 同上：dev——dev 唯一的 node 安装（/usr/local/bin 只有 pi 符号链接、没有 node，
-    # 而 pi 的 shebang 是 env node）。多版本并存时按自然版本序降序全进，首个命中胜出
+    # 版本管理器（nvm 类）管的 node：多版本并存，按自然版本序降序全进 ⇒ 首个命中胜出
     "~/.nvm/versions/node/*/bin",
-    # 同上：mac（node/pi-web/git 只在 homebrew）
+    # macOS 包管理器前缀（该平台下 node/git/CLI 只在这里）
     "/opt/homebrew/bin",
-    # mihomo：clash 服务（dev；nv1 的同名二进制亦在此）
+    # 系统级的本地安装前缀（不用包管理器前缀的手工/第三方安装落在这里）
     "/usr/local/bin",
 )
 
@@ -207,7 +204,7 @@ def clean_env():
     # envscrub's lists never mention PATH, so the calling channel's PATH used to
     # reach service children verbatim (and decided which python3/node they got);
     # replace it with the channel-independent form (prefix + inherited tail).
-    # Covers both callers: build_env (start spawn) and stop_cmd (maas.py stop).
+    # Covers both callers: build_env (start spawn) and stop_cmd (external runner).
     env["PATH"] = canonical_path(env.get("PATH", ""))
     return env
 
@@ -224,8 +221,8 @@ def load_services():
 
 def _host_matches(hostnames, entries):
     """Case-insensitive host match: an entry matches if it equals the
-    hostname or is a dot-separated prefix of it (e.g. `nv1` matches
-    hostnames `nv1` and `nv1.example.com`)."""
+    hostname or is a dot-separated prefix of it (e.g. an entry `node1` matches
+    hostnames `node1` and `node1.example.com`)."""
     hn = hostnames.lower()
     return any(hn == h or hn.startswith(h + ".")
                for h in (str(x).lower() for x in entries))
@@ -412,8 +409,8 @@ def cmd_status():
 
 
 def cmd_status_machine():
-    """Machine-readable status: one JSON object on one line (consumed by
-    svc4web.py multi-host aggregation)."""
+    """Machine-readable status: one JSON object on one line (the input face of
+    a multi-host aggregator)."""
     rows = gather()
     services = []
     n_drift = 0
@@ -557,7 +554,7 @@ _WRAPPER_CHAIN_RES = (
     re.compile(r"(?:\A|/)(?:ba|da|z|k|fi)?sh\s+(?:-\S+\s+)*-\S*c"),
     # ^ sh -c / bash -lc recipe shells AND caller tool shells (`bash -c '<whole
     #   command line>'`); a login shell (`-bash`) and real daemons
-    #   (`bash svc/agentd-loop.sh`) do not match.
+    #   (`bash <supervision-loop>.sh`) do not match.
     re.compile(r"(?:\A|/)(?:sg|newgrp)(?:\s|\Z)"),     # supplementary-group switch
     re.compile(r"(?:\A|/)(?:sudo|env|timeout|setsid|nohup)(?:\s|\Z)"),
 )
@@ -584,9 +581,9 @@ def self_and_ancestors(table):
          'svc.py'" does NOT work: through a launcher above make that token sits
          in the make recipe shell, not in the caller's cmdline.
       ② stopping at the first non-wrapper keeps a supervised restart possible:
-         agentd-loop.sh -> runner.py -> pi-rpc-wrap.py -> pi -> (tool shell) ->
-         make -> sh -c -> svc.py stops at the pi session, so
-         `bash svc/agentd-loop\\.sh` above it stays matchable. Daemons we start
+         loop.sh -> daemon.py -> session-wrapper -> agent -> (tool shell) ->
+         make -> sh -c -> svc.py stops at the agent session, so
+         `bash <dir>/loop\\.sh` above it stays matchable. Daemons we start
          are detached (start_new_session) and are never ancestors at all.
     Residual disciplines (new launcher shapes must be added to
     _WRAPPER_CHAIN_RES; an unanchored stop_match can still hit third parties
@@ -872,8 +869,8 @@ def _lifecycle_name(argv):
 
 
 def _expand(args):
-    """argv with ~ expansion (shell-style home dirs, e.g. mihomo's
-    ~/.config/mihomo): cmd is spawned without a shell, so expand here."""
+    """argv with ~ expansion (shell-style home dirs, e.g. a config path under
+    the service user's home): cmd is spawned without a shell, so expand here."""
     return [os.path.expanduser(str(a)) for a in args]
 
 
@@ -1021,7 +1018,8 @@ def cmd_start_name(argv):
         print(f"{name} started (pid {p.pid}, log {log.relative_to(WS)})")
         return 0
 
-    # wrapper=none: self-daemonizing / external runner (web, maas services).
+    # wrapper=none: self-daemonizing / external runner (a web server that owns
+    # its own lifecycle, a model-service runner with its own stop verb).
     # No pidfile, no dedup — the runner owns its restart-in-place (it kills
     # its own old instance). Run in the foreground with stdio inherited, then
     # confirm via the status probe before writing the meta.
@@ -1051,7 +1049,7 @@ def cmd_stop_name(argv):
     svc = svc_entry(name)
     _validate_entry(svc)
     if svc.get("stop_cmd"):
-        # external runner owns its own shutdown (maas.py stop)
+        # external runner owns its own shutdown (its declared stop verb)
         r = subprocess.run(_expand(svc["stop_cmd"]), cwd=str(WS),
                            env=clean_env())
         pidfile(name).unlink(missing_ok=True)
