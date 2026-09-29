@@ -88,7 +88,7 @@ while :; do
   now="$(date +%s)"
   if [ $((now - LAST_BEAT)) -ge "$BEAT" ]; then
     LAST_BEAT="$now"
-    echo "$(date '+%F %T') [sync-loop] alive: cycles=${CYCLES} acted=${ACTED} last=${LAST_ACTED} interval=${INTERVAL}s
+    echo "$(date '+%F %T') [sync-loop] alive: cycles=${CYCLES} acted=${ACTED} last=${LAST_ACTED} interval=${INTERVAL}s"
   fi
 
   # 后台 sleep + wait：TERM 能立刻打断（同 agentd/loop.sh 的形态）
