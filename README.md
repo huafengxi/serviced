@@ -40,7 +40,6 @@ python3 serviced/test_registry.py        # 单测：注册表 loader
 - 机制语义与不变量：`serviced.py` 模块 docstring（Invariants）
 - 启停纪律、版本纪律、重启纪律：工作区根 `AGENTS.md`「服务与后台进程（make）」
   （按名引用形态 = `@ws-agents#behavior-rules`，只在工作区内可解）
-- 服务排障流程：工作区 skill `service-troubleshooting`
 - 各**被纠偏**服务的常驻壳、实现体与跨机状态视图：均不在本仓（住各自服务仓与调用方工作区；本仓只从注册表读到它们的启动命令）
 - 单服务运维册与部署面事实（内网端点/主机名/凭据面路径 ⇒ 不能公开）：住调用方工作区的运维册目录（本工作区 = `ops/`，收录判据 = 其 README）
 - 跨仓依赖两枚：身份洗刷名单的单点 = `agentd/envscrub.py`（与服务监督侧 runner spawn 同口径，禁两份名单漂移）；`env_file` 解密 = `encrypt/envdec.py`

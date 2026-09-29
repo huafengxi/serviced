@@ -47,7 +47,6 @@ Pointers — single sources, not restated here:
                                   (this workspace: services/README.md)
   start/stop, version, restart  the deployment's operating rules (this workspace:
                                 root AGENTS.md「服务与后台进程（make）」)
-  troubleshooting               the deployment's service-troubleshooting playbook
   incidents behind the rules    the deployment's incident notes — e.g. why a
       `pgrep -f` self-check pattern must not match itself, why processes started
       via `sg`/`newgrp` are non-dumpable (so `lsof` and `/proc/<pid>/fd` are
