@@ -16,6 +16,11 @@
 # 上千行同一句话），静默判据 = sync 的单行输出 `no drift, nothing to do`；该措辞若改 ⇒ 退化成
 # 每轮都记（多写日志，不漏事）。每 SERVICED_SYNC_BEAT 秒（缺省 3600）记一行 alive 证明在跑。
 # 一轮 sync 失败（注册表 config error、探针异常等）⇒ 每轮照记，响亮失败不退避。
+#
+# ⚠ 本文件的字串插值一律写 `${name}` 形态（即使后面接的是 ASCII）：**变量名紧邻多字节字符时，
+# bash 3.2（macOS 自带）会把后继字节并进变量名** ⇒ `set -u` 下整个 loop 死在「有东西要报」的
+# 那条分支上（实测报文 = `rc<乱码字节>: unbound variable`；bash 4.4/5.1 不受影响 ⇒ 只在最老
+# 的那台机上发作，且发作时机正好是唯一需要它说话的时候）。
 # 每轮的 sync 输出先落一个**逐轮唯一**的临时文件（run/sync-loop.out.XXXXXX）再由 loop 转写日志、
 # 随即删除。唯一性是正确要求，不是为了防泄文件：自指重启时旧 loop 的 sync 子进程与新 loop 会
 # 同时在写（实测：共用固定路径时两边各持自己的 offset ⇒ 新 loop 的 truncate 与旧 sync 的续写
@@ -59,7 +64,7 @@ on_term() {
 }
 trap on_term TERM INT
 
-echo "$(date '+%F %T') [sync-loop] 启动 (pid $$) interval=${INTERVAL}s beat=${BEAT}s sync=$SYNC"
+echo "$(date '+%F %T') [sync-loop] 启动 (pid $$) interval=${INTERVAL}s beat=${BEAT}s sync=${SYNC}"
 
 while :; do
   out_file="$(mktemp "$WS/run/sync-loop.out.XXXXXX" 2>/dev/null)" || out_file="$WS/run/sync-loop.out.$$"
@@ -76,14 +81,14 @@ while :; do
   else
     ACTED=$((ACTED + 1))
     LAST_ACTED="$(date '+%F %T')"
-    echo "$(date '+%F %T') [sync-loop] cycle #$CYCLES rc=$rc（有动作 ∨ 非静默输出）"
+    echo "$(date '+%F %T') [sync-loop] cycle #${CYCLES} rc=${rc}（有动作 ∨ 非静默输出）"
     printf '%s\n' "$out" | sed 's/^/  | /'
   fi
 
   now="$(date +%s)"
   if [ $((now - LAST_BEAT)) -ge "$BEAT" ]; then
     LAST_BEAT="$now"
-    echo "$(date '+%F %T') [sync-loop] alive: cycles=$CYCLES acted=$ACTED last=$LAST_ACTED interval=${INTERVAL}s"
+    echo "$(date '+%F %T') [sync-loop] alive: cycles=${CYCLES} acted=${ACTED} last=${LAST_ACTED} interval=${INTERVAL}s
   fi
 
   # 后台 sleep + wait：TERM 能立刻打断（同 agentd/loop.sh 的形态）
