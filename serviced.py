@@ -46,7 +46,8 @@ Pointers — single sources, not restated here:
   registry schema and fields      the registry's own README
                                   (this workspace: services/README.md)
   start/stop, version, restart  the deployment's operating rules (this workspace:
-                                root AGENTS.md「服务与后台进程（make）」)
+                                services/README.md, its start/stop and version
+                                discipline sections)
   incidents behind the rules    the deployment's incident notes — e.g. why a
       `pgrep -f` self-check pattern must not match itself, why processes started
       via `sg`/`newgrp` are non-dumpable (so `lsof` and `/proc/<pid>/fd` are
